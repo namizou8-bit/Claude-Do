@@ -192,13 +192,32 @@
     set(dataRef, data).catch(() => toast('保存できませんでした'));
   }
 
+  // Firebase drops empty arrays/objects, so rebuild a safe shape on read
+  function normalize(d) {
+    if (!d) return null;
+    let tabs = d.tabs;
+    if (!tabs) return null;
+    if (!Array.isArray(tabs)) tabs = Object.values(tabs);
+    tabs = tabs.filter(Boolean).map(t => {
+      let items = t.items;
+      if (!items) items = [];
+      else if (!Array.isArray(items)) items = Object.values(items);
+      items = items.filter(Boolean).map(it => ({
+        label: (it && it.label) ? it.label : '予定',
+        content: (it && it.content) ? it.content : ''
+      }));
+      return { name: t.name || '', items };
+    });
+    let activeTab = typeof d.activeTab === 'number' ? d.activeTab : 0;
+    return { activeTab, tabs };
+  }
+
   // realtime sync: reflect remote changes automatically
   onValue(dataRef, (snap) => {
-    const remote = snap.val();
-    if (remote && Array.isArray(remote.tabs)) {
-      if (JSON.stringify(remote) === JSON.stringify(data) && !firstLoad) return;
+    const remote = normalize(snap.val());
+    if (remote && Array.isArray(remote.tabs) && remote.tabs.length) {
+      if (JSON.stringify(remote) === JSON.stringify(data) && !firstLoad) { firstLoad = false; return; }
       data = remote;
-      if (typeof data.activeTab !== 'number') data.activeTab = 0;
       render();
     } else if (firstLoad) {
       // no data in cloud yet: seed it
@@ -275,10 +294,11 @@
     area.innerHTML = '';
     if (data.tabs.length === 0) { area.innerHTML = '<div class="panel"><p class="hint">「+」で日を追加してください。</p></div>'; return; }
     const tab = data.tabs[data.activeTab];
+    if (!Array.isArray(tab.items)) tab.items = [];
     const panel = document.createElement('div'); panel.className = 'panel';
     const head = document.createElement('div'); head.className = 'panel-head';
     head.innerHTML = `<span class="day-name">${escapeHtml(tab.name)}</span>
-      <span class="day-actions"><button id="renameBtn">名前変更</button><button id="delTabBtn">日を削除</button></span>`;
+      <span class="day-actions"><button id="tabLeftBtn" title="前へ">◀</button><button id="tabRightBtn" title="次へ">▶</button><button id="renameBtn">名前変更</button><button id="delTabBtn">日を削除</button></span>`;
     panel.appendChild(head);
 
     tab.items.forEach((item, idx) => {
@@ -307,6 +327,8 @@
     panel.appendChild(addWrap);
     area.appendChild(panel);
 
+    document.getElementById('tabLeftBtn').onclick = () => moveTab(-1);
+    document.getElementById('tabRightBtn').onclick = () => moveTab(1);
     document.getElementById('renameBtn').onclick = renameTab;
     document.getElementById('delTabBtn').onclick = deleteTab;
     document.getElementById('addBtn').onclick = addItem;
@@ -318,7 +340,9 @@
     const label = document.getElementById('newLabel').value.trim() || '予定';
     const content = document.getElementById('newContent').value.trim();
     if (!content) return;
-    data.tabs[data.activeTab].items.push({ label, content });
+    const tab = data.tabs[data.activeTab];
+    if (!Array.isArray(tab.items)) tab.items = [];
+    tab.items.push({ label, content });
     save(); render();
   }
   function deleteItem(idx) { data.tabs[data.activeTab].items.splice(idx, 1); save(); render(); }
@@ -326,6 +350,12 @@
     const items = data.tabs[data.activeTab].items; const ni = idx + dir;
     if (ni < 0 || ni >= items.length) return;
     [items[idx], items[ni]] = [items[ni], items[idx]]; save(); render();
+  }
+  function moveTab(dir) {
+    const i = data.activeTab; const ni = i + dir;
+    if (ni < 0 || ni >= data.tabs.length) return;
+    [data.tabs[i], data.tabs[ni]] = [data.tabs[ni], data.tabs[i]];
+    data.activeTab = ni; save(); render();
   }
 
   let editingIdx = null;
